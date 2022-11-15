@@ -3,7 +3,7 @@
 //! Supported selectors are:
 //! * tag based `span` or `a`
 //! * class based `.button`
-//! * id based `#mainbutton`
+//! * id based `#main_button`
 //! * direct child `>`
 //! * attribute selectors `[href]`, `[href="specific-value"]`, `[href*="contains-str"]`,
 //! `[href^="begins-with"]`,, `[href$="ends-with"]`
@@ -21,7 +21,6 @@ use std::default::Default;
 use std::sync::Arc;
 
 pub struct Document {
-    //{{{
     doc: ArcDom,
 }
 
@@ -71,19 +70,59 @@ impl Document {
         let sel = Selector::from(selector);
         sel.find(self.doc.document.children.borrow())
     }
-} //}}}
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum PseudoSpec {
+    /// Implementation of [:empty] selector
+    Empty,
+    /// Implementation of [:not(selector)] selector
+    Not(Selector),
+    /// Implementation of [:contains("value")] selector
+    Contains(String),
+    /// Implementation of [:icontains("value")] selector
+    CaseInsensitiveContains(String),
+}
+
+impl PseudoSpec {
+    fn matches(&self, node: &Arc<markup5ever_arcdom::Node>) -> bool {
+        use PseudoSpec::*;
+
+        let children = node.children.borrow();
+
+        match self {
+            Empty => true,
+            Not(v) => !v.find(children).is_empty(),
+            Contains(v) => {
+                for child in children.iter() {
+                    if let NodeData::Text { contents } = &child.data {
+                        if !contents.borrow().contains(v) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+            CaseInsensitiveContains(v) => {
+                for child in children.iter() {
+                    if let NodeData::Text { contents } = &child.data {
+                        if !contents.borrow().to_ascii_lowercase().contains(v) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Clone)]
 enum AttributeSpec {
-    //{{{
     /// Implementation of [attribute] selector
     Present,
     /// Implementation of [attribute="value"] selector
     Exact(String),
-    // Implementation of [attribute~="value"] selector
-    // ContainsWord(String, String),
-    // Implementation of [attribute|="value"] selector
-    // StartsWord(String, String),
     /// Implementation of [attribute^="value"] selector
     Starts(String),
     /// Implementation of [attribute$="value"] selector
@@ -104,15 +143,15 @@ impl AttributeSpec {
             Contains(v) => other.contains(v),
         }
     }
-} //}}}
+}
 
 #[derive(Debug, PartialEq, Clone)]
 struct Matcher {
-    //{{{
     tag: Vec<String>,
     class: Vec<String>,
     id: Vec<String>,
     attribute: HashMap<String, AttributeSpec>,
+    pseudo_selector: Vec<PseudoSpec>,
     direct_match: bool,
 }
 
@@ -136,13 +175,14 @@ impl From<&str> for Matcher {
                         id: vec![],
                         attribute: HashMap::new(),
                         direct_match: true,
+                        pseudo_selector: vec![],
                     };
                 }
-                '#' | '.' | '[' => {
+                '#' | '.' | '[' | ':' => {
                     segments.push(buf);
                     buf = "".to_string();
                 }
-                ']' => {
+                ']' | ')' => {
                     segments.push(buf);
                     buf = "".to_string();
                     continue;
@@ -160,6 +200,7 @@ impl From<&str> for Matcher {
             id: vec![],
             attribute: HashMap::new(),
             direct_match: false,
+            pseudo_selector: vec![],
         };
 
         for segment in segments {
@@ -167,6 +208,7 @@ impl From<&str> for Matcher {
                 Some('#') => res.id.push(segment[1..].to_string()),
                 Some('.') => res.class.push(segment[1..].to_string()),
                 Some('[') => res.add_data_attribute(segment[1..].to_string()),
+                Some(':') => res.add_pseudo_selector(segment[1..].to_string()),
                 None => {}
                 _ => res.tag.push(segment),
             }
@@ -177,6 +219,29 @@ impl From<&str> for Matcher {
 }
 
 impl Matcher {
+    fn add_pseudo_selector(&mut self, spec: String) {
+        use PseudoSpec::*;
+
+        let parts = spec.split_once('(');
+
+        if let Some((name, value)) = parts {
+            let value = value
+                .trim_matches(')')
+                .trim_matches(|c| c == '\'' || c == '"');
+
+            match name {
+                "contains" => self.pseudo_selector.push(Contains(value.to_owned())),
+                "icontains" => self.pseudo_selector.push(CaseInsensitiveContains(value.to_ascii_lowercase().to_owned())),
+                _ => {}
+            }
+        } else {
+            match spec.as_str() {
+                "empty" => self.pseudo_selector.push(Empty),
+                _ => {}
+            }
+        }
+    }
+
     fn add_data_attribute(&mut self, spec: String) {
         use AttributeSpec::*;
 
@@ -207,9 +272,18 @@ impl Matcher {
                 self.attribute.insert(k, Exact(v));
             }
             None => {
-                panic!("Colud not parse attribute spec \"{}\"", spec);
+                panic!("Could not parse attribute spec \"{}\"", spec);
             }
         }
+    }
+
+    fn pseudo_match(&self, node: &Arc<markup5ever_arcdom::Node>) -> bool {
+        for pseudo_selector in self.pseudo_selector.iter() {
+            if !pseudo_selector.matches(node) {
+                return false;
+            }
+        }
+        return true;
     }
 
     fn matches(&self, name: &QualName, attrs: Ref<'_, Vec<Attribute>>) -> bool {
@@ -244,20 +318,13 @@ impl Matcher {
 
         let name = name.local.to_string();
         let tag_match = self.tag.is_empty() || self.tag.iter().any(|tag| &name == tag);
-        // println!(
-        //     "for: {:?} \n {:?} \n {:?} \n tag_match: {}, id_match: {}, class_match: {}, attr_match: {} \n",
-        //     &self, name, attrs,
-        //     tag_match, id_match, class_match, attr_match
-        // );
 
         tag_match && id_match && class_match && attr_match
     }
 }
-//}}}
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 struct Selector {
-    //{{{
     matchers: Vec<Matcher>,
 }
 
@@ -286,27 +353,28 @@ impl Selector {
         elements: Vec<Handle>,
         direct_match: bool,
     ) -> Vec<Handle> {
-        let mut acc = vec![];
+        let mut accumulate = vec![];
 
-        for el in elements.iter() {
+        for element in elements.iter() {
             if !direct_match {
-                let children: Vec<_> = el.children.borrow().iter().map(Arc::clone).collect();
-                acc.append(&mut self.find_nodes(matcher, children, false));
+                let children: Vec<_> = element.children.borrow().iter().map(Arc::clone).collect();
+                accumulate.append(&mut self.find_nodes(matcher, children, false));
             }
-
-            match el.data {
+            match element.data {
                 NodeData::Element {
                     ref name,
                     ref attrs,
                     ..
                 } if matcher.matches(name, attrs.borrow()) => {
-                    acc.push(Arc::clone(&el));
+                    if matcher.pseudo_match(element) {
+                        accumulate.push(Arc::clone(&element));
+                    }
                 }
                 _ => {}
             };
         }
 
-        acc
+        accumulate
     }
 
     fn find(&self, elements: Ref<'_, Vec<Handle>>) -> Vec<Element> {
@@ -334,10 +402,9 @@ impl Selector {
 
         elements.iter().map(Element::from).collect()
     }
-} //}}}
+}
 
 pub struct Element {
-    //{{{
     handle: Handle,
 }
 
@@ -356,7 +423,7 @@ impl From<&Handle> for Element {
 }
 
 impl Element {
-    /// Get value of an attribue
+    /// Get value of an attribute
     ///
     /// # Arguments
     /// * `name` - attribute name
@@ -491,13 +558,13 @@ impl Element {
         let sel = Selector::from(selector);
         sel.find(self.handle.children.borrow())
     }
-} //}}}
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Matcher tests{{{
+    // Matcher tests
     #[test]
     fn test_matcher_tag() {
         let m = Matcher::from("a");
@@ -577,34 +644,7 @@ mod tests {
         assert_eq!(m.attribute, attr);
     }
 
-    //}}}
-
-    // // Selector tests{{{
-    // #[test]
-    // fn test_selector_parse_simple() {
-    //     let sel = Selector::from("a");
-    //     assert_eq!(
-    //         sel,
-    //         Selector {
-    //             css: "a".to_string(),
-    //             next: None
-    //         }
-    //     );
-    // }
-
-    // #[test]
-    // fn test_selector_parse_simple_with_class() {
-    //     let sel = Selector::from("a.link");
-    //     assert_eq!(
-    //         sel,
-    //         Selector {
-    //             css: "a.link".to_string(),
-    //             next: None
-    //         }
-    //     );
-    // } //}}}
-
-    // Element tests{{{
+    // Element tests
     #[test]
     fn test_el_tag() {
         let doc = Document::from("<a class='link'>hi there</a>");
@@ -840,5 +880,17 @@ mod tests {
         assert_eq!(sel.len(), 1);
     }
 
-    //}}}
+    #[test]
+    fn test_pseudo_selector_contains() {
+        let doc = Document::from(
+            "<div>
+                <span>one</span>
+                <span>One</span>
+            </div>",
+        );
+        let sel = doc.select("span:contains('one')");
+        assert_eq!(sel.len(), 1);
+        let sel = doc.select("span:icontains('one')");
+        assert_eq!(sel.len(), 2);
+    }
 }
