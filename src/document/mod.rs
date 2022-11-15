@@ -76,8 +76,12 @@ impl Document {
 enum PseudoSpec {
     /// Implementation of [:empty] selector
     Empty,
+    /// Implementation of [:not-empty] selector
+    NotEmpty,
     /// Implementation of [:not(selector)] selector
     Not(Selector),
+    /// Implementation of [:has(selector)] selector
+    Has(Selector),
     /// Implementation of [:contains("value")] selector
     Contains(String),
     /// Implementation of [:icontains("value")] selector
@@ -90,25 +94,40 @@ impl PseudoSpec {
 
         let children = node.children.borrow();
 
+        let texts = children
+            .iter()
+            .filter(|node| {
+                if let NodeData::Text { contents: _ } = node.data {
+                    return true;
+                } else {
+                    return false;
+                }
+            })
+            .map(|text_node| {
+                if let NodeData::Text { contents } = &text_node.data {
+                    return contents.borrow();
+                } else {
+                    unreachable!();
+                }
+            });
+
         match self {
-            Empty => true,
-            Not(v) => !v.find(children).is_empty(),
+            Not(selector) => selector.find(children).is_empty(),
+            Has(selector) => !selector.find(children).is_empty(),
+            Empty => children.is_empty(),
+            NotEmpty => !children.is_empty(),
             Contains(v) => {
-                for child in children.iter() {
-                    if let NodeData::Text { contents } = &child.data {
-                        if !contents.borrow().contains(v) {
-                            return false;
-                        }
+                for text in texts {
+                    if !text.contains(v) {
+                        return false;
                     }
                 }
                 return true;
             }
             CaseInsensitiveContains(v) => {
-                for child in children.iter() {
-                    if let NodeData::Text { contents } = &child.data {
-                        if !contents.borrow().to_ascii_lowercase().contains(v) {
-                            return false;
-                        }
+                for text in texts {
+                    if !text.to_ascii_lowercase().contains(v) {
+                        return false;
                     }
                 }
                 return true;
@@ -165,6 +184,7 @@ impl From<&str> for Matcher {
     fn from(input: &str) -> Self {
         let mut segments = vec![];
         let mut buf = "".to_string();
+        let mut inside_pseudo_fn = false;
 
         for c in input.chars() {
             match c {
@@ -179,10 +199,16 @@ impl From<&str> for Matcher {
                     };
                 }
                 '#' | '.' | '[' | ':' => {
-                    segments.push(buf);
-                    buf = "".to_string();
+                    if !inside_pseudo_fn {
+                        segments.push(buf);
+                        buf = "".to_string();
+                    }
+                }
+                '(' => {
+                    inside_pseudo_fn = true;
                 }
                 ']' | ')' => {
+                    inside_pseudo_fn = false;
                     segments.push(buf);
                     buf = "".to_string();
                     continue;
@@ -231,12 +257,17 @@ impl Matcher {
 
             match name {
                 "contains" => self.pseudo_selector.push(Contains(value.to_owned())),
-                "icontains" => self.pseudo_selector.push(CaseInsensitiveContains(value.to_ascii_lowercase().to_owned())),
+                "icontains" => self.pseudo_selector.push(CaseInsensitiveContains(
+                    value.to_ascii_lowercase().to_owned(),
+                )),
+                "has" => self.pseudo_selector.push(Has(value.into())),
+                "not" => self.pseudo_selector.push(Not(value.into())),
                 _ => {}
             }
         } else {
             match spec.as_str() {
                 "empty" => self.pseudo_selector.push(Empty),
+                "not-empty" => self.pseudo_selector.push(NotEmpty),
                 _ => {}
             }
         }
@@ -891,6 +922,51 @@ mod tests {
         let sel = doc.select("span:contains('one')");
         assert_eq!(sel.len(), 1);
         let sel = doc.select("span:icontains('one')");
+        assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_pseudo_selector_has() {
+        let doc = Document::from(
+            "<div>
+                <span class=\"owo\">one</span>
+            </div>",
+        );
+        let sel = doc.select("div:has(span.owo:contains(one))");
+        assert_eq!(sel.len(), 1);
+
+        let sel = doc.select("div:has(span.owo:contains(two))");
+        assert_eq!(sel.len(), 0);
+    }
+
+    #[test]
+    fn test_pseudo_selector_not() {
+        let doc = Document::from(
+            "<div>
+                <span class=\"owo\">one</span>
+                <span class=\"uwu\">two</span>
+            </div>",
+        );
+        let sel = doc.select("div:not(span.owo:contains(one))");
+        assert_eq!(sel.len(), 0);
+
+        let sel = doc.select("div:not(span:contains(three)):has(span.uwu)");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_pseudo_selector_empty() {
+        let doc = Document::from(
+            "<div>
+                <h1>Not Empty</h1>
+                <h1></h1>
+                <h1><span>Not Empty</span></h1>
+            </div>",
+        );
+        let sel = doc.select("h1:empty");
+        assert_eq!(sel.len(), 1);
+
+        let sel = doc.select("h1:not-empty");
         assert_eq!(sel.len(), 2);
     }
 }
