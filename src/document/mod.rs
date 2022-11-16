@@ -173,6 +173,7 @@ struct Matcher {
     pseudo_selector: Vec<PseudoSpec>,
     direct_match: bool,
     adjacent_sibling: bool,
+    siblings: bool,
 }
 
 impl From<String> for Matcher {
@@ -189,25 +190,15 @@ impl From<&str> for Matcher {
 
         for c in input.chars() {
             match c {
-                '>' => {
+                '>' | '+' | '~' => {
                     return Self {
                         tag: vec![],
                         class: vec![],
                         id: vec![],
                         attribute: HashMap::new(),
-                        direct_match: true,
-                        adjacent_sibling: false,
-                        pseudo_selector: vec![],
-                    };
-                }
-                '+' => {
-                    return Self {
-                        tag: vec![],
-                        class: vec![],
-                        id: vec![],
-                        attribute: HashMap::new(),
-                        direct_match: false,
-                        adjacent_sibling: true,
+                        direct_match: c == '>',
+                        siblings: c == '~',
+                        adjacent_sibling: c == '+',
                         pseudo_selector: vec![],
                     };
                 }
@@ -243,6 +234,7 @@ impl From<&str> for Matcher {
             attribute: HashMap::new(),
             direct_match: false,
             adjacent_sibling: false,
+            siblings: false,
             pseudo_selector: vec![],
         };
 
@@ -365,7 +357,7 @@ impl Matcher {
         }
 
         let name = name.local.to_string();
-        let tag_match = self.tag.is_empty() || self.tag.iter().any(|tag| &name == tag);
+        let tag_match = self.tag.is_empty() || self.tag.iter().any(|tag| tag == "*" || &name == tag);
 
         tag_match && id_match && class_match && attr_match
     }
@@ -430,7 +422,63 @@ impl Selector {
         let mut direct_match = false;
 
         for matcher in &self.matchers {
-            if matcher.direct_match {
+            // Get adjacent sibling
+            if matcher.adjacent_sibling || matcher.siblings {
+                direct_match = true;
+                elements = elements
+                    .iter()
+                    .flat_map(|el| {
+                        // Must have a parent to get the siblings
+                        if let Some(weak_parent) = el.parent.take() {
+                            let parent = weak_parent.upgrade().map(Element::from);
+                            el.parent.set(Some(weak_parent));
+                            if let Some(parent) = parent {
+                                let children = parent.handle.children.borrow();
+                                // Get only the element nodes
+                                let children: Vec<&Arc<markup5ever_arcdom::Node>> = children
+                                    .iter()
+                                    .filter(|el| {
+                                        if let NodeData::Element { .. } = el.data {
+                                            return true;
+                                        }
+                                        return false;
+                                    })
+                                    .collect();
+                                // Get the position of the current node inside of the children vector
+                                let position = children.iter().position(|element| {
+                                    // Use pointers to compare, because PartialEq is not implemented for Arc<Node>
+                                    let ptr1 = &el.children as *const _ as *const usize;
+                                    let ptr2 = &element.children as *const _ as *const usize;
+
+                                    return ptr1 == ptr2;
+                                });
+
+                                // If a position is found
+                                if let Some(position) = position {
+                                    // Sibling is next child
+                                    let sibling = position + 1;
+                                    // If there is a sibling
+                                    if sibling < children.len() {
+                                        if matcher.adjacent_sibling {
+                                            // Get the adjacent sibling
+                                            return vec![Arc::clone(children.get(sibling).unwrap())];
+                                        } else {
+                                            // Get the adjacent siblings
+                                            let siblings = children[sibling..]
+                                                .iter()
+                                                .map(|node| Arc::clone(node))
+                                                .collect::<Vec<Arc<markup5ever_arcdom::Node>>>();
+                                            return siblings;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return vec![];
+                    })
+                    .collect();
+                continue;
+            } else if matcher.direct_match {
                 direct_match = true;
                 elements = elements
                     .iter()
@@ -444,6 +492,7 @@ impl Selector {
                     .collect();
                 continue;
             }
+
             elements = self.find_nodes(matcher, elements, direct_match);
             direct_match = false;
         }
@@ -669,7 +718,15 @@ impl Elements {
 
     pub fn select(&self, selector: &str) -> Vec<Element> {
         let sel = Selector::from(selector);
-        sel.find(RefCell::new(self.elements.iter().map(|element| element.handle.clone()).collect()).borrow())
+        sel.find(
+            RefCell::new(
+                self.elements
+                    .iter()
+                    .map(|element| element.handle.clone())
+                    .collect(),
+            )
+            .borrow(),
+        )
     }
 }
 
@@ -1050,5 +1107,73 @@ mod tests {
 
         let sel = doc.select("h1:not-empty");
         assert_eq!(sel.len(), 2);
+    }
+
+    #[test]
+    fn test_adjacent_sibling() {
+        let doc = Document::from(
+            "<div>
+                <h1>one</h1>
+                <h2>two</h2>
+                <h3>three</h3>
+                <div>
+                    <span>four</span>
+                    <span>five</span>
+                    <span>six</span>
+                </div>
+                <div>
+                    <span>four</span>
+                    <span>five</span>
+                    <span>six</span>
+                </div>
+            </div>",
+        );
+        let sel = doc.select("h1 + h2");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.first().unwrap().tag(), Some("h2".to_owned()));
+
+        let sel = doc.select("h1 + h3");
+        assert_eq!(sel.len(), 0);
+
+        let sel = doc.select("div > div span:contains(five) + span");
+        assert_eq!(sel.len(), 2);
+        assert_eq!(sel.first().unwrap().text(), Some("six".to_owned()));
+        assert_eq!(sel.last().unwrap().text(), Some("six".to_owned()));
+    }
+
+    #[test]
+    fn test_siblings() {
+        let doc = Document::from(
+            "<div>
+                <h1>one</h1>
+                <h2>two</h2>
+                <h3>three</h3>
+                <div>
+                    <span>four</span>
+                    <span>five</span>
+                    <span>six</span>
+                </div>
+                <div>
+                    <span>four</span>
+                    <span>five</span>
+                    <span>six</span>
+                </div>
+            </div>",
+        );
+        let sel = doc.select("h1 ~ h2");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.first().unwrap().tag(), Some("h2".to_owned()));
+
+        let sel = doc.select("h1 ~ h3");
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel.first().unwrap().tag(), Some("h3".to_owned()));
+
+        let sel = doc.select("h2 ~ h1");
+        assert_eq!(sel.len(), 0);
+
+        let sel = doc.select("div > div span:contains(four) ~ *:contains(six)");
+        assert_eq!(sel.len(), 2);
+        assert_eq!(sel.first().unwrap().text(), Some("six".to_owned()));
+        assert_eq!(sel.last().unwrap().text(), Some("six".to_owned()));
     }
 }
