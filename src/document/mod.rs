@@ -15,7 +15,7 @@ use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use markup5ever::{Attribute, QualName};
 use markup5ever_arcdom::{ArcDom, Handle, NodeData};
-use std::cell::Ref;
+use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::default::Default;
 use std::sync::Arc;
@@ -172,6 +172,7 @@ struct Matcher {
     attribute: HashMap<String, AttributeSpec>,
     pseudo_selector: Vec<PseudoSpec>,
     direct_match: bool,
+    adjacent_sibling: bool,
 }
 
 impl From<String> for Matcher {
@@ -184,7 +185,7 @@ impl From<&str> for Matcher {
     fn from(input: &str) -> Self {
         let mut segments = vec![];
         let mut buf = "".to_string();
-        let mut inside_pseudo_fn = false;
+        let mut inside_something = false;
 
         for c in input.chars() {
             match c {
@@ -195,20 +196,35 @@ impl From<&str> for Matcher {
                         id: vec![],
                         attribute: HashMap::new(),
                         direct_match: true,
+                        adjacent_sibling: false,
+                        pseudo_selector: vec![],
+                    };
+                }
+                '+' => {
+                    return Self {
+                        tag: vec![],
+                        class: vec![],
+                        id: vec![],
+                        attribute: HashMap::new(),
+                        direct_match: false,
+                        adjacent_sibling: true,
                         pseudo_selector: vec![],
                     };
                 }
                 '#' | '.' | '[' | ':' => {
-                    if !inside_pseudo_fn {
+                    if !inside_something {
+                        if c == '[' {
+                            inside_something = true;
+                        }
                         segments.push(buf);
                         buf = "".to_string();
                     }
                 }
                 '(' => {
-                    inside_pseudo_fn = true;
+                    inside_something = true;
                 }
                 ']' | ')' => {
-                    inside_pseudo_fn = false;
+                    inside_something = false;
                     segments.push(buf);
                     buf = "".to_string();
                     continue;
@@ -226,6 +242,7 @@ impl From<&str> for Matcher {
             id: vec![],
             attribute: HashMap::new(),
             direct_match: false,
+            adjacent_sibling: false,
             pseudo_selector: vec![],
         };
 
@@ -284,7 +301,7 @@ impl Matcher {
             return;
         }
 
-        let v = parts[1].trim_matches('"').to_string();
+        let v = parts[1].trim_matches(|c| c == '"' || c == '\'').to_string();
         let k = parts[0];
         let k = k[..k.len() - 1].to_string();
 
@@ -588,6 +605,71 @@ impl Element {
     pub fn select(&self, selector: &str) -> Vec<Element> {
         let sel = Selector::from(selector);
         sel.find(self.handle.children.borrow())
+    }
+}
+
+pub struct Elements {
+    pub elements: Vec<Element>,
+}
+
+impl From<Vec<Element>> for Elements {
+    fn from(elements: Vec<Element>) -> Self {
+        Elements { elements }
+    }
+}
+
+impl Elements {
+    pub fn attrs(&self, attrs: Vec<&str>) -> Option<String> {
+        let mut buff = String::new();
+
+        for element in self.elements.iter() {
+            for attr in attrs.iter() {
+                if let Some(text) = element.attr(attr) {
+                    buff += &text;
+                    buff += "\n";
+                }
+                break;
+            }
+        }
+
+        let text = buff.trim().to_string();
+
+        return if text.is_empty() { None } else { Some(text) };
+    }
+
+    pub fn attr(&self, name: &str) -> Option<String> {
+        let mut buff = String::new();
+
+        for element in self.elements.iter() {
+            if let Some(text) = element.attr(name) {
+                buff += &text;
+                buff += "\n";
+            }
+        }
+
+        let text = buff.trim().to_string();
+
+        return if text.is_empty() { None } else { Some(text) };
+    }
+
+    pub fn text(&self) -> Option<String> {
+        let mut buff = String::new();
+
+        for element in self.elements.iter() {
+            if let Some(text) = element.text() {
+                buff += &text;
+                buff += "\n";
+            }
+        }
+
+        let text = buff.trim().to_string();
+
+        return if text.is_empty() { None } else { Some(text) };
+    }
+
+    pub fn select(&self, selector: &str) -> Vec<Element> {
+        let sel = Selector::from(selector);
+        sel.find(RefCell::new(self.elements.iter().map(|element| element.handle.clone()).collect()).borrow())
     }
 }
 
@@ -903,8 +985,8 @@ mod tests {
     fn test_attribute_selection_multiple_els() {
         let doc = Document::from(
             "<head>
-            <meta property='og:title' content='content'/>
-            <meta content='content'/>
+                <meta property='og:title' content='content'/>
+                <meta content='content'/>
             </head>",
         );
         let sel = doc.select("meta[property=\"og:title\"]");
