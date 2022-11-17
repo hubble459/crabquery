@@ -18,10 +18,19 @@ use markup5ever_arcdom::{ArcDom, Handle, NodeData};
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::default::Default;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub struct Document {
     doc: ArcDom,
+}
+
+impl Debug for Document {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Document")
+            .field("document", &self.doc.document)
+            .finish()
+    }
 }
 
 fn default_parse_opts() -> ParseOpts {
@@ -67,8 +76,13 @@ impl Document {
     /// assert_eq!(el.text().unwrap(), "hi there");
     /// ```
     pub fn select(&self, selector: &str) -> Vec<Element> {
-        let sel = Selector::from(selector);
-        sel.find(self.doc.document.children.borrow())
+        let mut elements = vec![];
+        for selector in selector.split(",") {
+            let sel = Selector::from(selector.trim());
+            let mut found = sel.find(self.doc.document.children.borrow());
+            elements.append(&mut found);
+        }
+        elements
     }
 }
 
@@ -357,7 +371,8 @@ impl Matcher {
         }
 
         let name = name.local.to_string();
-        let tag_match = self.tag.is_empty() || self.tag.iter().any(|tag| tag == "*" || &name == tag);
+        let tag_match =
+            self.tag.is_empty() || self.tag.iter().any(|tag| tag == "*" || &name == tag);
 
         tag_match && id_match && class_match && attr_match
     }
@@ -461,7 +476,9 @@ impl Selector {
                                     if sibling < children.len() {
                                         if matcher.adjacent_sibling {
                                             // Get the adjacent sibling
-                                            return vec![Arc::clone(children.get(sibling).unwrap())];
+                                            return vec![Arc::clone(
+                                                children.get(sibling).unwrap(),
+                                            )];
                                         } else {
                                             // Get the adjacent siblings
                                             let siblings = children[sibling..]
@@ -501,6 +518,7 @@ impl Selector {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Element {
     handle: Handle,
 }
@@ -652,8 +670,13 @@ impl Element {
     /// assert_eq!(a.attr("class").unwrap(), "link");
     /// ```
     pub fn select(&self, selector: &str) -> Vec<Element> {
-        let sel = Selector::from(selector);
-        sel.find(self.handle.children.borrow())
+        let mut elements = vec![];
+        for selector in selector.split(",") {
+            let sel = Selector::from(selector.trim());
+            let mut found = sel.find(self.handle.children.borrow());
+            elements.append(&mut found);
+        }
+        elements
     }
 }
 
@@ -717,16 +740,21 @@ impl Elements {
     }
 
     pub fn select(&self, selector: &str) -> Vec<Element> {
-        let sel = Selector::from(selector);
-        sel.find(
-            RefCell::new(
-                self.elements
-                    .iter()
-                    .map(|element| element.handle.clone())
-                    .collect(),
-            )
-            .borrow(),
-        )
+        let mut elements = vec![];
+        for selector in selector.split(",") {
+            let sel = Selector::from(selector.trim());
+            let mut found = sel.find(
+                RefCell::new(
+                    self.elements
+                        .iter()
+                        .map(|element| element.handle.clone())
+                        .collect(),
+                )
+                .borrow(),
+            );
+            elements.append(&mut found);
+        }
+        elements
     }
 }
 
