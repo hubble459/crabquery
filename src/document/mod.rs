@@ -21,6 +21,10 @@ use std::default::Default;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub trait Selectable {
+    fn select(&self, selector: &str) -> Vec<Element>;
+}
+
 pub struct Document {
     doc: ArcDom,
 }
@@ -62,7 +66,7 @@ impl From<String> for Document {
     }
 }
 
-impl Document {
+impl Selectable for Document {
     /// Select elements using given css selector
     ///
     /// # Example
@@ -75,7 +79,7 @@ impl Document {
     ///
     /// assert_eq!(el.text().unwrap(), "hi there");
     /// ```
-    pub fn select(&self, selector: &str) -> Vec<Element> {
+    fn select(&self, selector: &str) -> Vec<Element> {
         let mut elements = vec![];
         for selector in selector.split(",") {
             let sel = Selector::from(selector.trim());
@@ -131,20 +135,24 @@ impl PseudoSpec {
             Empty => children.is_empty(),
             NotEmpty => !children.is_empty(),
             Contains(v) => {
+                let mut empty = true;
                 for text in texts {
+                    empty = false;
                     if !text.contains(v) {
                         return false;
                     }
                 }
-                return true;
+                return !empty;
             }
             CaseInsensitiveContains(v) => {
+                let mut empty = true;
                 for text in texts {
+                    empty = false;
                     if !text.to_ascii_lowercase().contains(v) {
                         return false;
                     }
                 }
-                return true;
+                return !empty;
             }
         }
     }
@@ -537,6 +545,32 @@ impl From<&Handle> for Element {
     }
 }
 
+impl Selectable for Element {
+    /// Select child elements using given css selector
+    ///
+    /// # Example
+    /// ```
+    /// use crabquery::Document;
+    ///
+    /// let doc = Document::from("<span><a class='link'>hi there</a></span>");
+    /// let sel = doc.select("span");
+    /// let el = sel.first().unwrap();
+    /// let sel = el.select("a");
+    /// let a = sel.first().unwrap();
+    ///
+    /// assert_eq!(a.attr("class").unwrap(), "link");
+    /// ```
+    fn select(&self, selector: &str) -> Vec<Element> {
+        let mut elements = vec![];
+        for selector in selector.split(",") {
+            let sel = Selector::from(selector.trim());
+            let mut found = sel.find(self.handle.children.borrow());
+            elements.append(&mut found);
+        }
+        elements
+    }
+}
+
 impl Element {
     /// Get value of an attribute
     ///
@@ -653,30 +687,6 @@ impl Element {
         }
 
         None
-    }
-
-    /// Select child elements using given css selector
-    ///
-    /// # Example
-    /// ```
-    /// use crabquery::Document;
-    ///
-    /// let doc = Document::from("<span><a class='link'>hi there</a></span>");
-    /// let sel = doc.select("span");
-    /// let el = sel.first().unwrap();
-    /// let sel = el.select("a");
-    /// let a = sel.first().unwrap();
-    ///
-    /// assert_eq!(a.attr("class").unwrap(), "link");
-    /// ```
-    pub fn select(&self, selector: &str) -> Vec<Element> {
-        let mut elements = vec![];
-        for selector in selector.split(",") {
-            let sel = Selector::from(selector.trim());
-            let mut found = sel.find(self.handle.children.borrow());
-            elements.append(&mut found);
-        }
-        elements
     }
 }
 
@@ -1084,12 +1094,18 @@ mod tests {
             "<div>
                 <span>one</span>
                 <span>One</span>
+                <script>
+                    var owo = 0;
+                </script>
+                <script src=\"myscripts.js\"></script>
             </div>",
         );
         let sel = doc.select("span:contains('one')");
         assert_eq!(sel.len(), 1);
         let sel = doc.select("span:icontains('one')");
         assert_eq!(sel.len(), 2);
+        let sel = doc.select("script:contains(owo)");
+        assert_eq!(sel.len(), 1);
     }
 
     #[test]
