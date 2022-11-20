@@ -153,7 +153,7 @@ impl PseudoSpec {
                 for text in texts {
                     empty = false;
                     if !text.contains(v) {
-                        return false;
+                        return true;
                     }
                 }
                 return !empty;
@@ -163,7 +163,7 @@ impl PseudoSpec {
                 for text in texts {
                     empty = false;
                     if !text.to_ascii_lowercase().contains(v) {
-                        return false;
+                        return true;
                     }
                 }
                 return !empty;
@@ -1286,6 +1286,19 @@ mod tests {
         assert_eq!(sel.len(), 1);
 
         let sel = doc.select("div:has(> div:has(~ span))");
+        assert_eq!(sel.len(), 1);
+    }
+
+    #[test]
+    fn test_pseudo_selector_icontains() {
+        let doc = Document::from(
+            "<li>
+                Genres :
+                <a>poopoo</a>
+            </li>",
+        );
+
+        let sel = doc.select("li:icontains(genre) > a");
         assert_eq!(sel.len(), 1);
     }
 }
