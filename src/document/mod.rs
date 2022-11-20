@@ -15,6 +15,7 @@ use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use markup5ever::{Attribute, QualName};
 use markup5ever_arcdom::{ArcDom, Handle, NodeData};
+use regex::{Captures, Regex};
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 use std::default::Default;
@@ -72,6 +73,7 @@ impl Selectable for Document {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<span>hi there</span>");
     /// let sel = doc.select("span");
@@ -87,6 +89,18 @@ impl Selectable for Document {
             elements.append(&mut found);
         }
         elements
+    }
+}
+
+impl Selectable for &Document {
+    fn select(&self, selector: &str) -> Vec<Element> {
+        (*self).select(selector)
+    }
+}
+
+impl Selectable for &Element {
+    fn select(&self, selector: &str) -> Vec<Element> {
+        (*self).select(selector)
     }
 }
 
@@ -208,39 +222,44 @@ impl From<&str> for Matcher {
     fn from(input: &str) -> Self {
         let mut segments = vec![];
         let mut buf = "".to_string();
-        let mut inside_something = false;
+        let mut nested_level = 0;
+        println!("input: {:?}", input);
 
         for c in input.chars() {
             match c {
                 '>' | '+' | '~' => {
-                    return Self {
-                        tag: vec![],
-                        class: vec![],
-                        id: vec![],
-                        attribute: HashMap::new(),
-                        direct_match: c == '>',
-                        siblings: c == '~',
-                        adjacent_sibling: c == '+',
-                        pseudo_selector: vec![],
-                    };
+                    if nested_level == 0 {
+                        return Self {
+                            tag: vec![],
+                            class: vec![],
+                            id: vec![],
+                            attribute: HashMap::new(),
+                            direct_match: c == '>',
+                            siblings: c == '~',
+                            adjacent_sibling: c == '+',
+                            pseudo_selector: vec![],
+                        };
+                    }
                 }
                 '#' | '.' | '[' | ':' => {
-                    if !inside_something {
+                    if nested_level == 0 {
                         if c == '[' {
-                            inside_something = true;
+                            nested_level += 1;
                         }
                         segments.push(buf);
                         buf = "".to_string();
                     }
                 }
                 '(' => {
-                    inside_something = true;
+                    nested_level += 1;
                 }
                 ']' | ')' => {
-                    inside_something = false;
-                    segments.push(buf);
-                    buf = "".to_string();
-                    continue;
+                    nested_level -= 1;
+                    if nested_level == 0 {
+                        segments.push(buf);
+                        buf = "".to_string();
+                        continue;
+                    }
                 }
                 _ => {}
             };
@@ -248,6 +267,7 @@ impl From<&str> for Matcher {
             buf.push(c);
         }
         segments.push(buf);
+        println!("segments: {:?}", segments);
 
         let mut res = Self {
             tag: vec![],
@@ -282,9 +302,7 @@ impl Matcher {
         let parts = spec.split_once('(');
 
         if let Some((name, value)) = parts {
-            let value = value
-                .trim_matches(')')
-                .trim_matches(|c| c == '\'' || c == '"');
+            let value = value.trim_matches(|c| c == '\'' || c == '"');
 
             match name {
                 "contains" => self.pseudo_selector.push(Contains(value.to_owned())),
@@ -391,9 +409,26 @@ struct Selector {
     matchers: Vec<Matcher>,
 }
 
+lazy_static! {
+    static ref REGEX_BETWEEN_BRACKETS: Regex = Regex::new(r"\(([^)]*)\)").unwrap();
+    static ref REGEX_NEED_SPACES: Regex = Regex::new(r"\s*([>+~])\s*").unwrap();
+}
+
+const TMP_SPACE_REPLACEMENT: &str = "$$%#%@^*&!#";
+
 impl From<&str> for Selector {
     fn from(input: &str) -> Self {
-        let matchers: Vec<_> = input.split_whitespace().map(Matcher::from).collect();
+        println!("sel from: {:?}", input);
+        let input = REGEX_NEED_SPACES.replace(input.trim(), |caps: &Captures| {
+            format!(" {} ", caps[1].to_string())
+        });
+        let input = REGEX_BETWEEN_BRACKETS.replace(input.trim(), |caps: &Captures| {
+            caps[0].replace(" ", TMP_SPACE_REPLACEMENT)
+        });
+        let matchers: Vec<_> = input
+            .split_whitespace()
+            .map(|matcher| Matcher::from(matcher.replace(TMP_SPACE_REPLACEMENT, " ")))
+            .collect();
 
         Selector { matchers }
     }
@@ -444,17 +479,26 @@ impl Selector {
         let mut elements: Vec<_> = elements.iter().map(Arc::clone).collect();
         let mut direct_match = false;
 
-        for matcher in &self.matchers {
+        for (index, matcher) in self.matchers.iter().enumerate() {
             // Get adjacent sibling
             if matcher.adjacent_sibling || matcher.siblings {
                 direct_match = true;
                 elements = elements
-                    .iter()
-                    .flat_map(|el| {
+                    .into_iter()
+                    .flat_map(|mut el| {
                         // Must have a parent to get the siblings
                         if let Some(weak_parent) = el.parent.take() {
-                            let parent = weak_parent.upgrade().map(Element::from);
+                            let mut parent = weak_parent.upgrade().map(Element::from);
                             el.parent.set(Some(weak_parent));
+
+                            if index == 0 {
+                                parent = parent.map_or(None, |parent| {
+                                    el = parent.handle.clone();
+                                    parent.parent()
+                                });
+                                println!("{:#?}", parent);
+                            }
+
                             if let Some(parent) = parent {
                                 let children = parent.handle.children.borrow();
                                 // Get only the element nodes
@@ -505,16 +549,18 @@ impl Selector {
                 continue;
             } else if matcher.direct_match {
                 direct_match = true;
-                elements = elements
-                    .iter()
-                    .flat_map(|el| {
-                        el.children
-                            .borrow()
-                            .iter()
-                            .map(Arc::clone)
-                            .collect::<Vec<_>>()
-                    })
-                    .collect();
+                if index != 0 {
+                    elements = elements
+                        .iter()
+                        .flat_map(|el| {
+                            el.children
+                                .borrow()
+                                .iter()
+                                .map(Arc::clone)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
+                }
                 continue;
             }
 
@@ -551,6 +597,7 @@ impl Selectable for Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<span><a class='link'>hi there</a></span>");
     /// let sel = doc.select("span");
@@ -580,6 +627,7 @@ impl Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<a class='link'>hi there</a>");
     /// let sel = doc.select("a");
@@ -599,6 +647,7 @@ impl Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<a class='link'>hi there</a>");
     /// let sel = doc.select("a");
@@ -618,6 +667,7 @@ impl Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<a class='link'>hi there</a>");
     /// let sel = doc.select("a");
@@ -643,6 +693,7 @@ impl Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<a class='link'><span>hi there</span></a>");
     /// let sel = doc.select("a");
@@ -671,6 +722,7 @@ impl Element {
     /// # Example
     /// ```
     /// use crabquery::Document;
+    /// use crabquery::Selectable;
     ///
     /// let doc = Document::from("<a class='link'><span>hi there</span></a>");
     /// let sel = doc.select("span");
@@ -1219,5 +1271,25 @@ mod tests {
         assert_eq!(sel.len(), 2);
         assert_eq!(sel.first().unwrap().text(), Some("six".to_owned()));
         assert_eq!(sel.last().unwrap().text(), Some("six".to_owned()));
+    }
+
+    #[test]
+    fn test_pseudo_selector_nested() {
+        let doc = Document::from(
+            "<div>
+                <div>
+                    <span>
+                        <div>nested</div>
+                    </span>
+                </div>
+                <span>owo</span>
+            </div>",
+        );
+
+        let sel = doc.select("div:has(> div:has(> span))");
+        assert_eq!(sel.len(), 1);
+
+        let sel = doc.select("div:has(> div:has(~ span))");
+        assert_eq!(sel.len(), 1);
     }
 }

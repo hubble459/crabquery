@@ -10,6 +10,9 @@
 //! * all combinations of above like `div.container > form#feedback input.button`
 #![crate_name = "crabquery"]
 
+#[macro_use]
+extern crate lazy_static;
+
 mod document;
 
 pub use document::*;
