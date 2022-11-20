@@ -223,7 +223,6 @@ impl From<&str> for Matcher {
         let mut segments = vec![];
         let mut buf = "".to_string();
         let mut nested_level = 0;
-        println!("input: {:?}", input);
 
         for c in input.chars() {
             match c {
@@ -267,7 +266,6 @@ impl From<&str> for Matcher {
             buf.push(c);
         }
         segments.push(buf);
-        println!("segments: {:?}", segments);
 
         let mut res = Self {
             tag: vec![],
@@ -418,7 +416,6 @@ const TMP_SPACE_REPLACEMENT: &str = "$$%#%@^*&!#";
 
 impl From<&str> for Selector {
     fn from(input: &str) -> Self {
-        println!("sel from: {:?}", input);
         let input = REGEX_NEED_SPACES.replace(input.trim(), |caps: &Captures| {
             format!(" {} ", caps[1].to_string())
         });
@@ -496,7 +493,6 @@ impl Selector {
                                     el = parent.handle.clone();
                                     parent.parent()
                                 });
-                                println!("{:#?}", parent);
                             }
 
                             if let Some(parent) = parent {
