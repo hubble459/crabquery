@@ -149,24 +149,24 @@ impl PseudoSpec {
             Empty => children.is_empty(),
             NotEmpty => !children.is_empty(),
             Contains(v) => {
-                let mut empty = true;
+                let mut found = false;
                 for text in texts {
-                    empty = false;
-                    if !text.contains(v) {
-                        return true;
+                    if text.contains(v) {
+                        found = true;
+                        break;
                     }
                 }
-                return !empty;
+                return found;
             }
             CaseInsensitiveContains(v) => {
-                let mut empty = true;
+                let mut found = false;
                 for text in texts {
-                    empty = false;
-                    if !text.to_ascii_lowercase().contains(v) {
-                        return true;
+                    if text.to_ascii_lowercase().contains(v) {
+                        found = true;
+                        break;
                     }
                 }
-                return !empty;
+                return found;
             }
         }
     }
@@ -416,10 +416,10 @@ const TMP_SPACE_REPLACEMENT: &str = "$$%#%@^*&!#";
 
 impl From<&str> for Selector {
     fn from(input: &str) -> Self {
-        let input = REGEX_NEED_SPACES.replace(input.trim(), |caps: &Captures| {
+        let input = REGEX_NEED_SPACES.replace_all(input.trim(), |caps: &Captures| {
             format!(" {} ", caps[1].to_string())
         });
-        let input = REGEX_BETWEEN_BRACKETS.replace(input.trim(), |caps: &Captures| {
+        let input = REGEX_BETWEEN_BRACKETS.replace_all(input.trim(), |caps: &Captures| {
             caps[0].replace(" ", TMP_SPACE_REPLACEMENT)
         });
         let matchers: Vec<_> = input
