@@ -665,11 +665,11 @@ impl Element {
     /// use crabquery::Document;
     /// use crabquery::Selectable;
     ///
-    /// let doc = Document::from("<a class='link'>hi there</a>");
+    /// let doc = Document::from("<a class='link'>hi there <span>crab</span></a>");
     /// let sel = doc.select("a");
     /// let el = sel.first().unwrap();
     ///
-    /// assert_eq!(el.text().unwrap(), "hi there");
+    /// assert_eq!(el.text().unwrap(), "hi there ");
     /// ```
     pub fn text(&self) -> Option<String> {
         let mut res = "".to_string();
@@ -681,7 +681,35 @@ impl Element {
             }
         }
 
-        Some(res)
+        return if res.is_empty() { None } else { Some(res) };
+    }
+
+    /// Get text from this and all child nodes
+    ///
+    /// # Example
+    /// ```
+    /// use crabquery::Document;
+    /// use crabquery::Selectable;
+    ///
+    /// let doc = Document::from("<a class='link'>hi there <span>crab</span></a>");
+    /// let sel = doc.select("a");
+    /// let el = sel.first().unwrap();
+    ///
+    /// assert_eq!(el.all_text(), "hi there crab");
+    /// ```
+    pub fn all_text(&self) -> Option<String> {
+        let mut res = "".to_string();
+        let children = self.handle.children.borrow();
+
+        for child in children.iter() {
+            if let NodeData::Text { ref contents } = child.data {
+                res.push_str(&contents.borrow().to_string().as_str());
+            } else if let NodeData::Element { .. } = child.data {
+                res.push_str(Element::from(child).all_text().unwrap_or(String::new()).as_str());
+            }
+        }
+
+        return if res.is_empty() { None } else { Some(res) };
     }
 
     /// Get children elements
@@ -787,6 +815,21 @@ impl Elements {
 
         for element in self.elements.iter() {
             if let Some(text) = element.text() {
+                buff += &text;
+                buff += "\n";
+            }
+        }
+
+        let text = buff.trim().to_string();
+
+        return if text.is_empty() { None } else { Some(text) };
+    }
+
+    pub fn all_text(&self) -> Option<String> {
+        let mut buff = String::new();
+
+        for element in self.elements.iter() {
+            if let Some(text) = element.all_text() {
                 buff += &text;
                 buff += "\n";
             }
@@ -1119,6 +1162,20 @@ mod tests {
             </div>",
         );
         let sel = doc.select("span");
+        let el = sel.first().unwrap();
+        assert!(el.parent().is_some());
+        assert_eq!(el.parent().unwrap().tag().unwrap(), "div");
+    }
+
+    #[test]
+    fn test_only_id() {
+        let doc = Document::from(
+            "<div>
+            <span>one</span>
+            <span id=\"two\">two</span>
+            </div>",
+        );
+        let sel = doc.select("#two");
         let el = sel.first().unwrap();
         assert!(el.parent().is_some());
         assert_eq!(el.parent().unwrap().tag().unwrap(), "div");
