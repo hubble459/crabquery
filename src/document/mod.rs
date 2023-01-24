@@ -695,7 +695,7 @@ impl Element {
     /// let sel = doc.select("a");
     /// let el = sel.first().unwrap();
     ///
-    /// assert_eq!(el.all_text(), "hi there crab");
+    /// assert_eq!(el.all_text().unwrap(), "hi there crab");
     /// ```
     pub fn all_text(&self) -> Option<String> {
         let mut res = "".to_string();
