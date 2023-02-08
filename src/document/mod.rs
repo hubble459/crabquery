@@ -565,9 +565,6 @@ impl Selector {
             direct_match = false;
         }
 
-        for element in elements.iter() {
-            println!("found {:?}", Element::from(element).attr("class"));
-        }
         let elements: Vec<Element> = elements.into_iter().map(Element::from).collect();
         let v: HashSet<_> = elements.into_iter().collect();
         return v.into_iter().collect();
