@@ -17,9 +17,10 @@ use markup5ever::{Attribute, QualName};
 use markup5ever_arcdom::{ArcDom, Handle, NodeData};
 use regex::{Captures, Regex};
 use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::default::Default;
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub trait Selectable {
@@ -564,7 +565,12 @@ impl Selector {
             direct_match = false;
         }
 
-        elements.iter().map(Element::from).collect()
+        for element in elements.iter() {
+            println!("found {:?}", Element::from(element).attr("class"));
+        }
+        let elements: Vec<Element> = elements.into_iter().map(Element::from).collect();
+        let v: HashSet<_> = elements.into_iter().collect();
+        return v.into_iter().collect();
     }
 }
 
@@ -572,6 +578,23 @@ impl Selector {
 pub struct Element {
     handle: Handle,
 }
+
+impl Hash for Element {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let ptr = &self.handle.children as *const _ as *const usize;
+        ptr.hash(state);
+    }
+}
+
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool { 
+        let ptr1 = &self.handle.children as *const _ as *const usize;
+        let ptr2 = &other.handle.children as *const _ as *const usize;
+        return ptr1 == ptr2;
+    }
+}
+
+impl Eq for Element {}
 
 impl From<Handle> for Element {
     fn from(e: Handle) -> Self {
@@ -705,7 +728,12 @@ impl Element {
             if let NodeData::Text { ref contents } = child.data {
                 res.push_str(&contents.borrow().to_string().as_str());
             } else if let NodeData::Element { .. } = child.data {
-                res.push_str(Element::from(child).all_text().unwrap_or(String::new()).as_str());
+                res.push_str(
+                    Element::from(child)
+                        .all_text()
+                        .unwrap_or(String::new())
+                        .as_str(),
+                );
             }
         }
 

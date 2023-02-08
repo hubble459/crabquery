@@ -21,3 +21,11 @@ fn test_docs_rs_index() {
     let els = document.select("a[href]");
     assert!(els.len() > 20);
 }
+
+#[test]
+fn test_dungeon_majesty_index() {
+    let document = Document::from(include_str!("fixtures/dungeon_majesty.html"));
+
+    let els = document.select("div img.wp-manga-chapter-img");
+    assert_eq!(els.len(), 18);
+}
