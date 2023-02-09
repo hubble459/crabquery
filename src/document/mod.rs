@@ -17,7 +17,7 @@ use markup5ever::{Attribute, QualName};
 use markup5ever_arcdom::{ArcDom, Handle, NodeData};
 use regex::{Captures, Regex};
 use std::cell::{Ref, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::default::Default;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -565,9 +565,7 @@ impl Selector {
             direct_match = false;
         }
 
-        let elements: Vec<Element> = elements.into_iter().map(Element::from).collect();
-        let v: HashSet<_> = elements.into_iter().collect();
-        return v.into_iter().collect();
+        return elements.into_iter().map(Element::from).collect();
     }
 }
 
@@ -584,7 +582,7 @@ impl Hash for Element {
 }
 
 impl PartialEq for Element {
-    fn eq(&self, other: &Self) -> bool { 
+    fn eq(&self, other: &Self) -> bool {
         let ptr1 = &self.handle.children as *const _ as *const usize;
         let ptr2 = &other.handle.children as *const _ as *const usize;
         return ptr1 == ptr2;
